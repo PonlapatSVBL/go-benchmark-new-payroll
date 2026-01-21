@@ -40,8 +40,8 @@ func main() {
 	// Create session receiver
 	receiver1Opts := azbus1.SessionReceiverOptions{
 		SessionPool: 75,
-		BatchSize:   5,
-		ProcessPool: 5,
+		BatchSize:   20,
+		ProcessPool: 20,
 	}
 	receiver1 := azbus1.NewSessionReceiver(ctx, &wg, client, sender, "test_new_payroll_1", &receiver1Opts)
 
