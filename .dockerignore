@@ -9,10 +9,6 @@ bin
 # Dependency directories
 vendor
 
-# Environment variables
-.env
-.env.*
-
 # OS generated files
 .DS_Store
 Thumbs.db
