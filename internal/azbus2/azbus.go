@@ -227,6 +227,9 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 		WHERE _slip.employee_id = ?
 		AND _slip.master_salary_month = ?
 	`, body.EmployeeID, body.YearMonth).Scan(&slip1Records)
+	if len(slip1Records) == 0 {
+		return fmt.Errorf("no salary slip found in spare database for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
+	}
 	fmt.Println(slip1Records)
 
 	// Database Production
@@ -245,6 +248,9 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 		WHERE employee_id = ?
 		AND master_salary_month = ?
 	`, body.EmployeeID, body.YearMonth).Scan(&slip2Records)
+	if len(slip2Records) == 0 {
+		return fmt.Errorf("no salary slip found in production database for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
+	}
 
 	// Query Data (DomainCode, ChannelCode, Extracode) from Database Spare
 	var result struct {
@@ -270,6 +276,9 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 		AND _sv.instance_server_id = ?
 		AND _ch.instance_server_channel_id = ?
 	`, "100002", slip1Records[0].InstanceServerID, slip1Records[0].InstanceServerChannelID, "100002", slip1Records[0].InstanceServerID, slip1Records[0].InstanceServerChannelID).Scan(&result)
+	if result.DomainCode == "" || result.ChannelCode == "" {
+		return fmt.Errorf("failed to fetch domain/channel/extracode for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
+	}
 
 	// Log MySQL Full
 	logRecord := dto.LogRecord{
@@ -307,6 +316,9 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 			AND _slip.employee_id = ?
 			ORDER BY _report.master_salary_split_seq
 		`, slip1Records[0].MasterSalaryReportID, slip1Records[0].EmployeeID).Scan(&splitSlip1Records)
+		if len(splitSlip1Records) == 0 {
+			return fmt.Errorf("no salary split slip found in spare database for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
+		}
 
 		// Database Production
 		var splitSlip2Records []struct {
@@ -326,6 +338,9 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 			AND _slip.employee_id = ?
 			ORDER BY _report.master_salary_split_seq
 		`, slip2Records[0].MasterSalaryReportID, slip2Records[0].EmployeeID).Scan(&splitSlip2Records)
+		if len(splitSlip2Records) == 0 {
+			return fmt.Errorf("no salary split slip found in production database for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
+		}
 
 		// Log MySQL Split
 		for _, splitSlip1Record := range splitSlip1Records {
