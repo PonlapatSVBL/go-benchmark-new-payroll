@@ -71,7 +71,7 @@ func main() {
 
 	// ดึงรายชื่อ Database ที่ต้องการส่งไปคำนวณเงินเดือน
 	var dbNames []string
-	db.Raw("SELECT code FROM hms_api.sys_list_of_value WHERE list_type = 'inst_dbn' ORDER BY code LIMIT 1 OFFSET 4").Scan(&dbNames)
+	db.Raw("SELECT code FROM hms_api.sys_list_of_value WHERE list_type = 'inst_dbn' ORDER BY code LIMIT 5 OFFSET 0").Scan(&dbNames)
 
 	// เตรียม Worker Pool สำหรับส่ง ServiceBus (ป้องกันคอขวด)
 	msgChan := make(chan dto.PayrollMessage, 5000)
