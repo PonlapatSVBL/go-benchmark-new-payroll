@@ -208,6 +208,7 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 		// DomainCode    string  `gorm:"column:domain_code"`
 		// ChannelCode   string  `gorm:"column:channel_code"`
 		EmployeeID              string  `gorm:"column:employee_id"`
+		BranchID                string  `gorm:"column:branch_id"`
 		TotalSalary             float64 `gorm:"column:total_salary"`
 		InstanceServerID        string  `gorm:"column:instance_server_id"`
 		InstanceServerChannelID string  `gorm:"column:instance_server_channel_id"`
@@ -280,17 +281,118 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 		return fmt.Errorf("failed to fetch domain/channel/extracode for employee_id: %s, year_month: %s", body.EmployeeID, body.YearMonth)
 	}
 
+	var resultImportLog struct {
+		ImportLogFundFlag     string `gorm:"column:import_log_fund_flag"`
+		ImportLogNormalFlag   string `gorm:"column:import_log_normal_flag"`
+		ImportLogWorktimeFlag string `gorm:"column:import_log_worktime_flag"`
+	}
+	sr.db1.Raw(`
+		SELECT
+		CASE
+			WHEN COUNT(CASE WHEN import_log_type = 'fund' THEN 1 END) > 0 THEN 'Y'
+			ELSE 'N'
+		END as import_log_fund_flag,
+		CASE
+			WHEN COUNT(CASE WHEN import_log_type = 'normal' THEN 1 END) > 0 THEN 'Y'
+			ELSE 'N'
+		END as import_log_normal_flag,
+		CASE
+			WHEN COUNT(CASE WHEN import_log_type = 'worktime' THEN 1 END) > 0 THEN 'Y'
+			ELSE 'N'
+		END as import_log_worktime_flag
+		FROM `+body.DbName+`.payroll_import_log
+		WHERE server_id = ?
+		AND instance_server_id = ?
+		AND instance_server_channel_id = ?
+		AND import_log_type IN ('fund', 'normal', 'worktime')
+		AND import_month = ?
+		GROUP BY instance_server_channel_id, import_month
+	`, "100002", slip1Records[0].InstanceServerID, slip1Records[0].InstanceServerChannelID, body.YearMonth).Scan(&resultImportLog)
+	if resultImportLog.ImportLogFundFlag == "" || resultImportLog.ImportLogNormalFlag == "" || resultImportLog.ImportLogWorktimeFlag == "" {
+		resultImportLog.ImportLogFundFlag = "N"
+		resultImportLog.ImportLogNormalFlag = "N"
+		resultImportLog.ImportLogWorktimeFlag = "N"
+	}
+
+	var resultMasterEmployee struct {
+		MasterEmployeeFlag string `gorm:"column:master_employee_flag"`
+	}
+	sr.db1.Raw(`
+		SELECT CASE WHEN master_employee_id IS NOT NULL THEN 'Y' ELSE 'N' END AS master_employee_flag
+		FROM `+body.DbName+`.payroll_master_employee
+		WHERE server_id = ?
+		AND instance_server_id = ?
+		AND instance_server_channel_id = ?
+		AND master_salary_report_id = ?
+		AND employee_id = ?
+		LIMIT 1
+	`, "100002", slip1Records[0].InstanceServerID, slip1Records[0].InstanceServerChannelID, slip1Records[0].MasterSalaryReportID, slip1Records[0].EmployeeID).Scan(&resultMasterEmployee)
+	if resultMasterEmployee.MasterEmployeeFlag == "" {
+		resultMasterEmployee.MasterEmployeeFlag = "N"
+	}
+
+	var resultMasterEmloyeeConfig struct {
+		MasterEmployeeConfigFlag string `gorm:"column:master_employee_config_flag"`
+	}
+	sr.db1.Raw(`
+		SELECT CASE WHEN master_employee_config_id IS NOT NULL THEN 'Y' ELSE 'N' END AS master_employee_config_flag
+		FROM `+body.DbName+`.payroll_master_employee_config
+		WHERE employee_id = ?
+		AND master_salary_month = ?
+		LIMIT 1
+	`, slip1Records[0].EmployeeID, body.YearMonth).Scan(&resultMasterEmloyeeConfig)
+	if resultMasterEmloyeeConfig.MasterEmployeeConfigFlag == "" {
+		resultMasterEmloyeeConfig.MasterEmployeeConfigFlag = "N"
+	}
+
+	var resultMasterCompanyConfig struct {
+		MasterCompanyConfigFlag string `gorm:"column:master_company_config_flag"`
+	}
+	sr.db1.Raw(`
+		SELECT CASE WHEN master_company_config_id IS NOT NULL THEN 'Y' ELSE 'N' END AS master_company_config_flag
+		FROM `+body.DbName+`.payroll_master_company_config
+		WHERE server_id = ?
+		AND instance_server_id = ?
+		AND instance_server_channel_id = ?
+		AND master_salary_month = ?
+		LIMIT 1
+	`, "100002", slip1Records[0].InstanceServerID, slip1Records[0].InstanceServerChannelID, body.YearMonth).Scan(&resultMasterCompanyConfig)
+	if resultMasterCompanyConfig.MasterCompanyConfigFlag == "" {
+		resultMasterCompanyConfig.MasterCompanyConfigFlag = "N"
+	}
+
+	var resultMasterBranchSsoConfig struct {
+		MasterBranchSsoConfigFlag string `gorm:"column:master_branch_sso_config_flag"`
+	}
+	sr.db1.Raw(`
+		SELECT CASE WHEN master_branch_sso_config_id IS NOT NULL THEN 'Y' ELSE 'N' END AS master_branch_sso_config_flag
+		FROM `+body.DbName+`.payroll_master_branch_sso_config
+		WHERE master_salary_month = ?
+		AND branch_id = ?
+		LIMIT 1
+	`, body.YearMonth, slip1Records[0].BranchID).Scan(&resultMasterBranchSsoConfig)
+	if resultMasterBranchSsoConfig.MasterBranchSsoConfigFlag == "" {
+		resultMasterBranchSsoConfig.MasterBranchSsoConfigFlag = "N"
+	}
+
 	// Log MySQL Full
 	logRecord := dto.LogRecord{
-		YearMonth:      body.YearMonth,
-		DomainCode:     result.DomainCode,
-		ChannelCode:    result.ChannelCode,
-		Period:         "Full",
-		ExtraCodeFlag:  result.ExtraCodeFlag,
-		EmployeeID:     body.EmployeeID,
-		TotalSalaryOld: slip2Records[0].TotalSalary,
-		TotalSalaryNew: slip1Records[0].TotalSalary,
-		TotalVariance:  slip1Records[0].TotalSalary - slip2Records[0].TotalSalary,
+		YearMonth:                 body.YearMonth,
+		DomainCode:                result.DomainCode,
+		ChannelCode:               result.ChannelCode,
+		Period:                    "Full",
+		ExtraCodeFlag:             result.ExtraCodeFlag,
+		ImportLogFundFlag:         resultImportLog.ImportLogFundFlag,
+		ImportLogNormalFlag:       resultImportLog.ImportLogNormalFlag,
+		ImportLogWorktimeFlag:     resultImportLog.ImportLogWorktimeFlag,
+		MasterEmployeeFlag:        resultMasterEmployee.MasterEmployeeFlag,
+		MasterEmployeeConfigFlag:  resultMasterEmloyeeConfig.MasterEmployeeConfigFlag,
+		MasterCompanyConfigFlag:   resultMasterCompanyConfig.MasterCompanyConfigFlag,
+		MasterBranchSsoConfigFlag: resultMasterBranchSsoConfig.MasterBranchSsoConfigFlag,
+		EmployeeID:                body.EmployeeID,
+		TotalSalaryOld:            slip2Records[0].TotalSalary,
+		TotalSalaryNew:            slip1Records[0].TotalSalary,
+		TotalVariance:             slip1Records[0].TotalSalary - slip2Records[0].TotalSalary,
 	}
 	if err := sr.CreateLogMySQL(&logRecord); err != nil {
 		return err
@@ -347,15 +449,22 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 			for _, splitSlip2Record := range splitSlip2Records {
 				if splitSlip1Record.YearMonth == splitSlip2Record.YearMonth && splitSlip1Record.Period == splitSlip2Record.Period && splitSlip1Record.EmployeeID == splitSlip2Record.EmployeeID {
 					logRecordSplit := dto.LogRecord{
-						YearMonth:      body.YearMonth,
-						DomainCode:     result.DomainCode,
-						ChannelCode:    result.ChannelCode,
-						Period:         splitSlip1Record.Period,
-						ExtraCodeFlag:  result.ExtraCodeFlag,
-						EmployeeID:     body.EmployeeID,
-						TotalSalaryOld: splitSlip2Record.TotalSalary,
-						TotalSalaryNew: splitSlip1Record.TotalSalary,
-						TotalVariance:  splitSlip1Record.TotalSalary - splitSlip2Record.TotalSalary,
+						YearMonth:                 body.YearMonth,
+						DomainCode:                result.DomainCode,
+						ChannelCode:               result.ChannelCode,
+						Period:                    splitSlip1Record.Period,
+						ExtraCodeFlag:             result.ExtraCodeFlag,
+						ImportLogFundFlag:         resultImportLog.ImportLogFundFlag,
+						ImportLogNormalFlag:       resultImportLog.ImportLogNormalFlag,
+						ImportLogWorktimeFlag:     resultImportLog.ImportLogWorktimeFlag,
+						MasterEmployeeFlag:        resultMasterEmployee.MasterEmployeeFlag,
+						MasterEmployeeConfigFlag:  resultMasterEmloyeeConfig.MasterEmployeeConfigFlag,
+						MasterCompanyConfigFlag:   resultMasterCompanyConfig.MasterCompanyConfigFlag,
+						MasterBranchSsoConfigFlag: resultMasterBranchSsoConfig.MasterBranchSsoConfigFlag,
+						EmployeeID:                body.EmployeeID,
+						TotalSalaryOld:            splitSlip2Record.TotalSalary,
+						TotalSalaryNew:            splitSlip1Record.TotalSalary,
+						TotalVariance:             splitSlip1Record.TotalSalary - splitSlip2Record.TotalSalary,
 					}
 					if err := sr.CreateLogMySQL(&logRecordSplit); err != nil {
 						return err
@@ -370,26 +479,40 @@ func (sr *SessionReceiver) handleMessage(msg *azservicebus.ReceivedMessage) erro
 }
 
 func (sr *SessionReceiver) CreateLogMySQL(log *dto.LogRecord) error {
-	query := `INSERT INTO hms_payroll.audit_salary_logs 
+	query := `INSERT INTO hms_payroll.audit_salary_logs
               (
-                ` + "`year_month`" + `, 
-                ` + "`domain_code`" + `, 
-                ` + "`channel_code`" + `, 
-                ` + "`period`" + `, 
-                ` + "`extra_code_flag`" + `, 
-                ` + "`employee_id`" + `, 
-                ` + "`total_salary_old`" + `, 
-                ` + "`total_salary_new`" + `, 
-                ` + "`total_variance`" + `
-              ) 
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE 
+                ` + "`year_month`" + `,
+                ` + "`domain_code`" + `,
+                ` + "`channel_code`" + `,
+                ` + "`period`" + `,
+                ` + "`extra_code_flag`" + `,
+                ` + "`employee_id`" + `,
+                ` + "`total_salary_old`" + `,
+                ` + "`total_salary_new`" + `,
+                ` + "`total_variance`" + `,
+                ` + "`import_log_fund_flag`" + `,
+                ` + "`import_log_normal_flag`" + `,
+                ` + "`import_log_worktime_flag`" + `,
+                ` + "`master_employee_flag`" + `,
+                ` + "`master_employee_config_flag`" + `,
+                ` + "`master_company_config_flag`" + `,
+                ` + "`master_branch_sso_config_flag`" + `
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON DUPLICATE KEY UPDATE
                 ` + "`total_salary_old`" + ` = VALUES(` + "`total_salary_old`" + `),
                 ` + "`total_salary_new`" + ` = VALUES(` + "`total_salary_new`" + `),
                 ` + "`total_variance`" + ` = VALUES(` + "`total_variance`" + `),
                 ` + "`domain_code`" + ` = VALUES(` + "`domain_code`" + `),
                 ` + "`channel_code`" + ` = VALUES(` + "`channel_code`" + `),
-                ` + "`extra_code_flag`" + ` = VALUES(` + "`extra_code_flag`" + `);`
+                ` + "`extra_code_flag`" + ` = VALUES(` + "`extra_code_flag`" + `),
+                ` + "`import_log_fund_flag`" + ` = VALUES(` + "`import_log_fund_flag`" + `),
+                ` + "`import_log_normal_flag`" + ` = VALUES(` + "`import_log_normal_flag`" + `),
+                ` + "`import_log_worktime_flag`" + ` = VALUES(` + "`import_log_worktime_flag`" + `),
+                ` + "`master_employee_flag`" + ` = VALUES(` + "`master_employee_flag`" + `),
+                ` + "`master_employee_config_flag`" + ` = VALUES(` + "`master_employee_config_flag`" + `),
+                ` + "`master_company_config_flag`" + ` = VALUES(` + "`master_company_config_flag`" + `),
+                ` + "`master_branch_sso_config_flag`" + ` = VALUES(` + "`master_branch_sso_config_flag`" + `);`
 
 	err := sr.db1.Exec(query,
 		log.YearMonth,
@@ -401,6 +524,13 @@ func (sr *SessionReceiver) CreateLogMySQL(log *dto.LogRecord) error {
 		log.TotalSalaryOld,
 		log.TotalSalaryNew,
 		log.TotalVariance,
+		log.ImportLogFundFlag,
+		log.ImportLogNormalFlag,
+		log.ImportLogWorktimeFlag,
+		log.MasterEmployeeFlag,
+		log.MasterEmployeeConfigFlag,
+		log.MasterCompanyConfigFlag,
+		log.MasterBranchSsoConfigFlag,
 	).Error
 
 	return err
